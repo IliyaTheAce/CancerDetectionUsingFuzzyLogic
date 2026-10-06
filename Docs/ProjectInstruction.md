@@ -113,6 +113,7 @@ Same three features for every model. Fit on the training set only. Report the te
 | SVM | Nonlinear baseline | RBF kernel, `C=1`, `gamma="scale"`, same standardization. Cutoff from training cross-validation accuracy. |
 | Decision tree | Rule-like baseline | Depth 3, at least 15 patients per leaf. Cutoff from training cross-validation accuracy. |
 | XGBoost | Boosted-tree baseline | 100 trees, depth 2, learning rate 0.1, minimum child weight 5. Cutoff from training cross-validation accuracy. |
+| Fuzzy boost | Boosted fuzzy model | The same booster, plus the 27 rule firing strengths and age. Age was kept because training out-of-fold residuals tracked it. Cutoff from training cross-validation accuracy. |
 
 Metrics, same definition for every row:
 
@@ -217,6 +218,7 @@ Done:
 * Feature selection: `PSAD`, `f_t_psa`, `PV`
 * Fuzzification and the 27-rule system
 * Test-set comparison against logistic regression, SVM, a decision tree, and XGBoost
+* Fuzzy boost: the same booster, the 27 rule firing strengths, and age
 * 100 repeated splits and paper charts under `charts/`
 
 Not in this project:

@@ -2,7 +2,7 @@
 
 This file walks through every step of the program: what that step is, why it is there, and what it writes. The numbers in the last section come from running `main.py` on the downloaded files. They are not filled in by hand.
 
-The proposed method is a fuzzy inference system. Logistic regression, an RBF support vector machine, a decision tree, and XGBoost are the comparison. There is no neural network and no ANFIS step. The earlier roadmap that included neural learning is only in `Docs/backup/2026-10-05/`.
+The proposed method is a fuzzy inference system, plus fuzzy boost: the same shallow XGBoost, given the 27 rule firing strengths and age. Logistic regression, an RBF support vector machine, a decision tree, and a plain XGBoost are the comparison. There is no neural network and no ANFIS step. The earlier roadmap that included neural learning is only in `Docs/backup/2026-10-05/`.
 
 ## What the program is
 
@@ -187,7 +187,9 @@ On the 120-patient test set the learned system scores 0.758 accuracy, 0.654 sens
 
 ### What it is
 
-This step fits four classifiers on the same three columns and puts them next to the fuzzy scores.
+This step fits four classifiers on the same three columns, and fuzzy boost, and puts them next to the fuzzy scores.
+
+Fuzzy boost uses the same depth-2 XGBoost as the plain booster (100 rounds, learning rate 0.1, minimum child weight 5). It also receives the 27 rule firing strengths, with quartile knots refit inside each training fold, and age. Age failed the univariate screen (oriented AUC about 0.55), so it is not a rule input. It stayed because the booster's training out-of-fold residuals still tracked age, and adding it raised accuracy, F1, and ROC-AUC on the training folds of other splits. Red-cell count had a residual correlation of the same size and did not raise those scores, so it stays out.
 
 | Model | What it is | Why this setting |
 | --- | --- | --- |
@@ -195,6 +197,7 @@ This step fits four classifiers on the same three columns and puts them next to 
 | SVM | An RBF kernel support vector machine. | A nonlinear baseline that does not use rules. `C=1`, `gamma="scale"`, with the same standardization. |
 | Decision tree | One tree of if-then splits. | The closest ordinary relative of a rule system. Depth is 3, so a path can use each feature. A leaf must hold at least 15 training patients, so the tree cannot isolate one person. |
 | XGBoost | One hundred shallow trees added together. | The boosted-tree baseline. Each tree has depth 2, the learning rate is 0.1, and a leaf must carry child weight at least 5. |
+| Fuzzy boost | That same booster, on the three features, age, and the 27 rule firing strengths. | Age is fixed from the primary training residuals. Knots are refit inside each fold. The cutoff is still the training accuracy cutoff. |
 
 Nothing in this list was chosen by looking at the test set.
 
@@ -268,6 +271,7 @@ These rows are the result on the 120-patient test set from the seed-42 split. Ea
 | Model | Accuracy | Sensitivity | Specificity | Precision | F1 | ROC-AUC | TP | TN | FP | FN |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Fuzzy system | 0.758 | 0.654 | 0.838 | 0.756 | 0.701 | 0.793 | 34 | 57 | 11 | 18 |
+| Fuzzy boost | 0.817 | 0.673 | 0.926 | 0.875 | 0.761 | 0.834 | 35 | 63 | 5 | 17 |
 | Logistic regression | 0.692 | 0.615 | 0.750 | 0.653 | 0.634 | 0.731 | 32 | 51 | 17 | 20 |
 | SVM (RBF) | 0.683 | 0.577 | 0.765 | 0.652 | 0.612 | 0.698 | 30 | 52 | 16 | 22 |
 | Decision tree | 0.700 | 0.365 | 0.956 | 0.864 | 0.514 | 0.715 | 19 | 65 | 3 | 33 |
@@ -276,7 +280,7 @@ These rows are the result on the 120-patient test set from the seed-42 split. Ea
 How to read that table:
 
 * **This is not proof that the fuzzy system is better.** The holdout has 120 patients. The split is random, not an independent published external cohort. A paper can report this table. It cannot call it the dataset's independent external validation.
-* **Accuracy and F1.** At the frozen accuracy cutoff, the fuzzy system is the highest of the five on both (0.758 and 0.701). XGBoost is close on accuracy (0.742) and ROC-AUC (0.780 against 0.793).
+* **Accuracy, F1, and ROC-AUC.** At the frozen accuracy cutoff, fuzzy boost is the highest of the six (0.817 accuracy, 0.761 F1, 0.834 ROC-AUC). The fuzzy system is next on accuracy and F1 (0.758 and 0.701). Plain XGBoost is next on ROC-AUC (0.780).
 * **The old rules.** Direction-point consequents at 0.5, on this same holdout, reach accuracy 0.717 and F1 0.679, with ROC-AUC 0.736. The learned consequents are the better ranking model on this split.
 * **Memorization check.** XGBoost's training ROC-AUC is 0.881 and its holdout ROC-AUC is 0.780. Quote the holdout row.
 
@@ -285,12 +289,13 @@ Training cross-validation, for context only:
 | Model | Accuracy | Sensitivity | Specificity | F1 | ROC-AUC |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Fuzzy system | 0.743 | 0.655 | 0.809 | 0.687 | 0.780 |
+| Fuzzy boost | 0.757 | 0.641 | 0.846 | 0.695 | 0.796 |
 | Logistic regression | 0.711 | 0.689 | 0.728 | 0.673 | 0.740 |
 | SVM (RBF) | 0.688 | 0.607 | 0.750 | 0.627 | 0.723 |
 | Decision tree | 0.720 | 0.393 | 0.967 | 0.547 | 0.763 |
 | XGBoost | 0.738 | 0.587 | 0.853 | 0.659 | 0.784 |
 
-Across 100 repeated splits, mean test accuracy is about 0.733 for the fuzzy system and 0.732 for XGBoost. Mean ROC-AUC is about 0.785 for fuzzy and 0.787 for XGBoost. The single seed-42 holdout is one draw from that spread.
+Across 100 repeated splits, mean test accuracy is about 0.757 for fuzzy boost, 0.733 for the fuzzy system, and 0.732 for XGBoost. Mean ROC-AUC is about 0.813 for fuzzy boost, 0.785 for fuzzy, and 0.787 for XGBoost. Fuzzy boost is ahead of the fuzzy system on accuracy in 71 of 100 splits and on ROC-AUC in 87. The single seed-42 holdout is one draw from that spread, and it sits at the high end of fuzzy boost's accuracy range.
 
 ## What this code deliberately does not do
 

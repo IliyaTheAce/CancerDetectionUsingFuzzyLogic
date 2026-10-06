@@ -34,6 +34,7 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import StratifiedKFold
 
+from src import fuzzify
 from src.fuzzify import SELECTED_FEATURES, TERMS, _apply, _fit_all
 from src.preprocess import OUTPUT_DIR, ROW_ID_COLUMN, TARGET_CODE_COLUMN, TARGET_COLUMN
 
@@ -253,6 +254,8 @@ def run() -> None:
             },
         ]
     )
+
+    metrics.insert(0, "membership", fuzzify.ACTIVE_MEMBERSHIP)
 
     rules = _describe(system.consequents)
     rules.to_csv(OUTPUT_DIR / "fuzzy_rules.csv", index=False)

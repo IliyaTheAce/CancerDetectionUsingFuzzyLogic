@@ -1,7 +1,10 @@
 """Build the paper figures from the saved metric tables.
 
-All images go under `charts/`. This step only reads CSVs written by the
-earlier pipeline stages; it does not refit models.
+Images go under `charts/<membership>/`, using the membership named in
+`membership_params.csv`. A quartile run writes `charts/quartile/`, an MRI
+run writes `charts/mri/`, and the same for `eau`, `classic`, and `gray_zone`.
+This step only reads CSVs written by the earlier pipeline stages; it does
+not refit models.
 """
 
 from __future__ import annotations
@@ -17,13 +20,11 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import ConfusionMatrixDisplay, roc_curve
 
-from src.compare import MODEL_COLORS, MODEL_LABELS
+from src.compare import MODEL_COLORS, MODEL_LABELS, MODEL_ORDER
+from src import fuzzify
 from src.fuzzify import SELECTED_FEATURES, TERMS, membership_degrees
 from src.preprocess import OUTPUT_DIR, ROOT, TARGET_CODE_COLUMN
 
-CHARTS_DIR = ROOT / "charts"
-
-MODEL_ORDER = ("fuzzy", "logistic_regression", "svm", "decision_tree", "xgboost")
 METRIC_ORDER = (
     ("accuracy", "Accuracy"),
     ("precision", "Precision"),
@@ -36,23 +37,41 @@ FEATURE_TITLES = {"PSAD": "PSAD", "f_t_psa": "f/t PSA", "PV": "Prostate volume"}
 TERM_COLORS = {"low": "#4C78A8", "medium": "#F58518", "high": "#E45756"}
 
 
+def _membership_name() -> str:
+    params_path = OUTPUT_DIR / "membership_params.csv"
+    if params_path.exists():
+        params = pd.read_csv(params_path)
+        if "membership" in params.columns and not params.empty:
+            return str(params["membership"].iloc[0])
+    return fuzzify.ACTIVE_MEMBERSHIP
+
+
+def charts_dir() -> Path:
+    folder = ROOT / "charts" / _membership_name()
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
 def _save(figure: plt.Figure, name: str) -> Path:
-    CHARTS_DIR.mkdir(parents=True, exist_ok=True)
-    path = CHARTS_DIR / name
+    path = charts_dir() / name
     figure.savefig(path, dpi=160, bbox_inches="tight")
     plt.close(figure)
     return path
 
 
+def _knot_triple(row: object) -> tuple[float, float, float]:
+    if hasattr(row, "low_shoulder"):
+        return float(row.low_shoulder), float(row.medium_peak), float(row.high_shoulder)
+    return float(row.q25_low_shoulder), float(row.q50_medium_peak), float(row.q75_high_shoulder)
+
+
 def _membership() -> Path:
     params = pd.read_csv(OUTPUT_DIR / "membership_params.csv")
     train = pd.read_csv(OUTPUT_DIR / "train_model.csv")
-    knots = {
-        row.feature: (row.q25_low_shoulder, row.q50_medium_peak, row.q75_high_shoulder)
-        for row in params.itertuples(index=False)
-    }
+    knots = {row.feature: _knot_triple(row) for row in params.itertuples(index=False)}
+    membership_name = _membership_name()
 
-    figure, axes = plt.subplots(1, 3, figsize=(11.2, 3.4))
+    figure, axes = plt.subplots(1, 3, figsize=(11.2, 3.6))
     for axis, feature in zip(axes, SELECTED_FEATURES):
         low_knot, medium_knot, high_knot = knots[feature]
         left = min(float(train[feature].quantile(0.01)), low_knot)
@@ -70,6 +89,7 @@ def _membership() -> Path:
             axis.axvline(knot, color="#b0b0b0", linewidth=0.6, linestyle=":")
 
     axes[0].legend(frameon=False)
+    figure.suptitle(f"Membership: {membership_name}", y=1.02)
     figure.tight_layout()
     return _save(figure, "membership_functions.png")
 
@@ -88,7 +108,7 @@ def _metrics_comparison() -> Path:
     width = 0.15
     offsets = np.linspace(-(len(METRIC_ORDER) - 1) / 2, (len(METRIC_ORDER) - 1) / 2, len(METRIC_ORDER))
 
-    figure, axis = plt.subplots(figsize=(10.5, 4.8))
+    figure, axis = plt.subplots(figsize=(12.4, 4.8))
     for offset, (column, title) in zip(offsets, METRIC_ORDER):
         values = holdout[column].to_numpy()
         axis.bar(x + offset * width, values, width=width, label=title)
@@ -111,7 +131,7 @@ def _key_metrics() -> Path:
     width = 0.25
     offsets = (-width, 0.0, width)
 
-    figure, axis = plt.subplots(figsize=(9.0, 4.6))
+    figure, axis = plt.subplots(figsize=(11.2, 4.6))
     for offset, (column, title) in zip(offsets, KEY_METRICS):
         axis.bar(x + offset, holdout[column].to_numpy(), width=width, label=title)
 
@@ -135,7 +155,7 @@ def _roc_curves() -> Path:
         metrics.loc[metrics["view"] == "held_out"].set_index("model")["roc_auc"].to_dict()
     )
 
-    figure, axis = plt.subplots(figsize=(6.4, 5.2))
+    figure, axis = plt.subplots(figsize=(7.2, 5.6))
     for name in MODEL_ORDER:
         false_positive, true_positive, _ = roc_curve(y_true, test[name].to_numpy())
         axis.plot(
@@ -157,9 +177,9 @@ def _roc_curves() -> Path:
     return _save(figure, "roc_curves.png")
 
 
-def _confusion_matrix() -> Path:
+def _confusion_matrix(model: str, file_name: str) -> Path:
     metrics = pd.read_csv(OUTPUT_DIR / "comparison_metrics.csv")
-    row = metrics.loc[(metrics["model"] == "fuzzy") & (metrics["view"] == "held_out")].iloc[0]
+    row = metrics.loc[(metrics["model"] == model) & (metrics["view"] == "held_out")].iloc[0]
     matrix = np.array([[int(row.tn), int(row.fp)], [int(row.fn), int(row.tp)]])
     figure, axis = plt.subplots(figsize=(4.8, 4.2))
     display = ConfusionMatrixDisplay(
@@ -167,14 +187,14 @@ def _confusion_matrix() -> Path:
         display_labels=["Negative", "Positive"],
     )
     display.plot(ax=axis, cmap="Blues", colorbar=False, values_format="d")
-    axis.set_title("Fuzzy system, holdout")
+    axis.set_title(f"{MODEL_LABELS[model]}, holdout")
     figure.tight_layout()
-    return _save(figure, "confusion_matrix_fuzzy.png")
+    return _save(figure, file_name)
 
 
 def _repeated_boxplot() -> Path:
     results = pd.read_csv(OUTPUT_DIR / "repeated_metrics.csv")
-    figure, axes = plt.subplots(1, 3, figsize=(12.5, 4.2))
+    figure, axes = plt.subplots(1, 3, figsize=(13.2, 4.4))
     for axis, metric, title in zip(
         axes,
         ("accuracy", "f1", "roc_auc"),
@@ -196,7 +216,7 @@ def _repeated_boxplot() -> Path:
 
 def _repeated_error_bars() -> Path:
     summary = pd.read_csv(OUTPUT_DIR / "repeated_summary.csv")
-    figure, axes = plt.subplots(1, 3, figsize=(12.5, 4.2))
+    figure, axes = plt.subplots(1, 3, figsize=(13.2, 4.4))
     x = np.arange(len(MODEL_ORDER))
     for axis, metric, title in zip(
         axes,
@@ -222,38 +242,40 @@ def print_chart_data() -> None:
     holdout = _holdout_metrics()
     metrics = pd.read_csv(OUTPUT_DIR / "comparison_metrics.csv")
     fuzzy = metrics.loc[(metrics["model"] == "fuzzy") & (metrics["view"] == "held_out")].iloc[0]
+    boosted = metrics.loc[(metrics["model"] == "fuzzy_boost") & (metrics["view"] == "held_out")].iloc[0]
     summary = pd.read_csv(OUTPUT_DIR / "repeated_summary.csv")
 
-    print("=== membership_functions.png (quartile knots, training cohort) ===")
+    membership_name = _membership_name()
+    print(f"=== charts/{membership_name}/membership_functions.png ===")
     print(params.to_string(index=False))
     print()
 
     metric_columns = [column for column, _ in METRIC_ORDER] + ["roc_auc"]
     holdout_table = holdout.loc[:, ["model", *metric_columns]].copy()
     holdout_table["model"] = holdout_table["model"].map(MODEL_LABELS)
-    print("=== metrics_comparison.png / accuracy_f1_auc.png (holdout) ===")
+    print(f"=== charts/{membership_name}/metrics_comparison.png / accuracy_f1_auc.png (holdout) ===")
     print(holdout_table.round(3).to_string(index=False))
     print()
 
-    print("=== roc_curves.png (holdout ROC-AUC) ===")
+    print(f"=== charts/{membership_name}/roc_curves.png (holdout ROC-AUC) ===")
     roc_table = holdout.loc[:, ["model", "roc_auc"]].copy()
     roc_table["model"] = roc_table["model"].map(MODEL_LABELS)
     print(roc_table.round(3).to_string(index=False))
     print()
 
-    print("=== confusion_matrix_fuzzy.png (holdout counts) ===")
-    print(f"TN={int(fuzzy.tn)}  FP={int(fuzzy.fp)}  FN={int(fuzzy.fn)}  TP={int(fuzzy.tp)}")
-    print(
-        f"accuracy={fuzzy.accuracy:.3f}  sensitivity={fuzzy.sensitivity:.3f}  "
-        f"specificity={fuzzy.specificity:.3f}  precision={fuzzy.precision:.3f}  f1={fuzzy.f1:.3f}"
-    )
+    print("=== confusion matrices (holdout counts) ===")
+    for label, row in (("Fuzzy system", fuzzy), ("Fuzzy boost", boosted)):
+        print(
+            f"{label}: TN={int(row.tn)}  FP={int(row.fp)}  FN={int(row.fn)}  TP={int(row.tp)}  "
+            f"accuracy={row.accuracy:.3f}  f1={row.f1:.3f}"
+        )
     print()
 
     repeated_metrics = ("accuracy", "f1", "roc_auc")
     repeated = summary.loc[summary["metric"].isin(repeated_metrics)].copy()
     repeated["model"] = repeated["model"].map(MODEL_LABELS)
     repeated = repeated.loc[:, ["model", "metric", "mean", "sd", "median", "p2_5", "p97_5"]]
-    print("=== repeated_metrics.png / repeated_mean_sd.png (100 splits) ===")
+    print(f"=== charts/{membership_name}/repeated_metrics.png / repeated_mean_sd.png (100 splits) ===")
     print(repeated.round(3).to_string(index=False))
     print()
 
@@ -264,7 +286,8 @@ def run() -> list[Path]:
         _metrics_comparison(),
         _key_metrics(),
         _roc_curves(),
-        _confusion_matrix(),
+        _confusion_matrix("fuzzy", "confusion_matrix_fuzzy.png"),
+        _confusion_matrix("fuzzy_boost", "confusion_matrix_fuzzy_boost.png"),
         _repeated_boxplot(),
         _repeated_error_bars(),
     ]
